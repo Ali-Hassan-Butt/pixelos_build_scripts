@@ -15,15 +15,13 @@ BOT_TOKEN="6341925197:AAGwB5iiwpPBYs38deeswPQ78Obo1Lit9Is"
 CHAT_ID="1417234061"
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Helper: send a Telegram message
 tg() {
     curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
         -d chat_id="${CHAT_ID}" \
         -d parse_mode="HTML" \
         -d text="$1" > /dev/null
 }
-
-# Helper: upload zip to Pixeldrain, return download URL
+ 
 upload_pixeldrain() {
     local FILE="$1"
     local FILENAME=$(basename "$FILE")
@@ -36,67 +34,73 @@ upload_pixeldrain() {
         echo "Upload failed: $RESPONSE"
     fi
 }
-
-# ── Start ────────────────────────────────────────────────────────────────────
+ 
 tg "🚀 <b>Build Started</b>
 Device: apollo (Xiaomi Mi 10T)
-ROM: PixelOS 16
+ROM: XdroidCAF 12
 Time: $(date '+%Y-%m-%d %H:%M UTC')"
-
-echo ""
-echo "=========================================="
-echo "  PixelOS 16 — apollo — Crave Build"
-echo "=========================================="
-
+ 
 # STEP 1 — Repo init
-tg "📦 <b>[1/4]</b> Running repo init..."
+tg "📦 <b>[1/4]</b> Repo init..."
 rm -rf .repo/local_manifests
-repo init -u https://github.com/PixelOS-AOSP/android_manifest.git -b sixteen-qpr2 --git-lfs --depth=1
+repo init -u https://github.com/xdroid-CAF/xd_manifest -b twelve --git-lfs --depth=1
 tg "✅ <b>[1/4]</b> Repo init done"
-
+ 
 # STEP 2 — Local manifests
 tg "📋 <b>[2/4]</b> Cloning local manifests..."
 git clone -b main https://github.com/Ali-Hassan-Butt/local_manifests_apollo .repo/local_manifests
 tg "✅ <b>[2/4]</b> Local manifests cloned"
-
+ 
 # STEP 3 — Sync
-tg "🔄 <b>[3/4]</b> Syncing sources (this takes a while)..."
+tg "🔄 <b>[3/4]</b> Syncing sources..."
 /opt/crave/resync.sh
 tg "✅ <b>[3/4]</b> Sync complete"
+ 
+# STEP 4 — Create xdroid lunch target
+tg "⚙️ <b>[4/4]</b> Setting up device makefiles..."
 
-# STEP 4 — Build
-tg "🔨 <b>[4/4]</b> Build started — go touch some grass 🌿"
-
-export BUILD_USERNAME=basit
-export BUILD_HOSTNAME=crave
-
-source build/envsetup.sh
-lunch pixelos_apollo-bp4a-user
-make installclean
-m bacon
-
-# ── Upload & notify ──────────────────────────────────────────────────────────
-ZIP=$(find out/target/product/apollo/ -maxdepth 1 -name "*.zip" | head -1)
-
-if [ -n "$ZIP" ]; then
-    tg "✅ <b>Build Successful!</b>
-📁 File: $(basename $ZIP)
-⬆️ Uploading to Pixeldrain..."
-
-    LINK=$(upload_pixeldrain "$ZIP")
-
-    tg "📥 <b>Download Ready!</b>
-🔗 $LINK
-
-Device: apollo (Mi 10T)
-ROM: PixelOS 16
-Built by: basit @ crave"
-else
-    tg "❌ <b>Build failed</b> — no zip found in output. Check Crave logs."
-    exit 1
+if [ ! -f "device/xiaomi/apollo/xdroid_apollo.mk" ]; then
+    # Copy the lineage makefile
+    cp device/xiaomi/apollo/lineage_apollo.mk device/xiaomi/apollo/xdroid_apollo.mk
+    
+    # Swap lineage branding and vendor paths for xdroid
+    sed -i 's/lineage_apollo/xdroid_apollo/g' device/xiaomi/apollo/xdroid_apollo.mk
+    sed -i 's/vendor\/lineage/vendor\/xdroid/g' device/xiaomi/apollo/xdroid_apollo.mk
+    
+    # Append Xdroid specific variables
+    echo "XDROID_BOOT := 1080" >> device/xiaomi/apollo/xdroid_apollo.mk
+    echo "Created xdroid_apollo.mk"
 fi
 
-echo ""
-echo "=========================================="
-echo "  BUILD DONE! Check Telegram for link."
-echo "=========================================="
+# STEP 5 — Build
+tg "🔨 <b>[4/4]</b> Build started — go touch some grass 🌿"
+ 
+export BUILD_USERNAME=basit
+export BUILD_HOSTNAME=crave
+export TZ="Asia/Karachi"
+ 
+source build/envsetup.sh
+lunch xdroid_apollo-userdebug
+make installclean
+make xd -j$(nproc --all)
+ 
+# Upload & notify
+ZIP=$(find out/target/product/apollo/ -maxdepth 1 -name "*.zip" | head -1)
+ 
+if [ -n "$ZIP" ]; then
+    tg "✅ <b>Build Successful!</b>
+📁 $(basename $ZIP)
+⬆️ Uploading to Pixeldrain..."
+ 
+    LINK=$(upload_pixeldrain "$ZIP")
+ 
+    tg "📥 <b>Download Ready!</b>
+🔗 $LINK
+ 
+Device: apollo (Mi 10T)
+ROM: XdroidCAF 12
+Built by: basit @ crave"
+else
+    tg "❌ <b>Build failed</b> — no zip found. Check Crave logs."
+    exit 1
+fi
