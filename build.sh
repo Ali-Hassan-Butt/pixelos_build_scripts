@@ -1,16 +1,7 @@
 #!/bin/bash
 set -e
 
-# =============================================================================
-#  PixelOS 16 — Xiaomi Mi 10T (apollo) — Crave Build Script
-#  With Telegram notifications + Pixeldrain upload
-# =============================================================================
 
-# ── Telegram config ──────────────────────────────────────────────────────────
-# 1. Talk to @BotFather on Telegram → /newbot → copy your token
-# 2. Send a message to your bot, then visit:
-#    https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
-#    to find your chat_id
 BOT_TOKEN="6341925197:AAGwB5iiwpPBYs38deeswPQ78Obo1Lit9Is"
 CHAT_ID="1417234061"
 # ─────────────────────────────────────────────────────────────────────────────
@@ -32,6 +23,7 @@ upload_pixeldrain() {
         echo "https://pixeldrain.com/u/${FILE_ID}"
     else
         echo "Upload failed: $RESPONSE"
+        echo ""
     fi
 }
  
@@ -40,39 +32,53 @@ Device: apollo (Xiaomi Mi 10T)
 ROM: XdroidCAF 12
 Time: $(date '+%Y-%m-%d %H:%M UTC')"
  
-# STEP 1 — Repo init
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+remove_lists=(
+    .repo/local_manifests
+    device/xiaomi/apollo
+    device/xiaomi/sm8250-common
+    device/qcom/sepolicy
+    device/qcom/sepolicy-legacy-um
+    device/qcom/sepolicy_vndr/legacy-um
+    kernel/xiaomi/sm8250
+    out/target/product/apollo
+    vendor/xiaomi/apollo
+    vendor/xiaomi/sm8250-common
+)
+ 
+echo "-- Removing old artifacts..."
+rm -rf "${remove_lists[@]}"
+ 
+# ── libncurses symlink (needed for Android 12 builds) ─────────────────────────
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6   /usr/lib/x86_64-linux-gnu/libtinfo.so.5
+echo "lib6 >> lib5 symlinks done"
+ 
+# ── Repo init ─────────────────────────────────────────────────────────────────
 tg "📦 <b>[1/4]</b> Repo init..."
-rm -rf .repo/local_manifests
-repo init -u https://github.com/xdroid-CAF/xd_manifest -b twelve --git-lfs --depth=1
+repo init --depth=1 --no-repo-verify --git-lfs \
+    -u https://github.com/xdroid-CAF/xd_manifest \
+    -b twelve \
+    -g default,-mips,-darwin,-notdefault
+echo "Repo init success"
 tg "✅ <b>[1/4]</b> Repo init done"
  
-# STEP 2 — Local manifests
+# ── Local manifests ───────────────────────────────────────────────────────────
 tg "📋 <b>[2/4]</b> Cloning local manifests..."
-git clone -b main https://github.com/Ali-Hassan-Butt/local_manifests_apollo .repo/local_manifests
+git clone --depth=1 \
+    https://github.com/Ali-Hassan-Butt/local_manifests_apollo \
+    -b main \
+    .repo/local_manifests
+echo "Local manifest clone success"
 tg "✅ <b>[2/4]</b> Local manifests cloned"
  
-# STEP 3 — Sync
+# ── Sync ──────────────────────────────────────────────────────────────────────
 tg "🔄 <b>[3/4]</b> Syncing sources..."
-/opt/crave/resync.sh
+[ -f /usr/bin/resync ] && /usr/bin/resync || /opt/crave/resync.sh
+echo "Sync success"
 tg "✅ <b>[3/4]</b> Sync complete"
  
-# STEP 4 — Create xdroid lunch target
-tg "⚙️ <b>[4/4]</b> Setting up device makefiles..."
-
-if [ ! -f "device/xiaomi/apollo/xdroid_apollo.mk" ]; then
-    # Copy the lineage makefile
-    cp device/xiaomi/apollo/lineage_apollo.mk device/xiaomi/apollo/xdroid_apollo.mk
-    
-    # Swap lineage branding and vendor paths for xdroid
-    sed -i 's/lineage_apollo/xdroid_apollo/g' device/xiaomi/apollo/xdroid_apollo.mk
-    sed -i 's/vendor\/lineage/vendor\/xdroid/g' device/xiaomi/apollo/xdroid_apollo.mk
-    
-    # Append Xdroid specific variables
-    echo "XDROID_BOOT := 1080" >> device/xiaomi/apollo/xdroid_apollo.mk
-    echo "Created xdroid_apollo.mk"
-fi
-
-# STEP 5 — Build
+# ── Build ─────────────────────────────────────────────────────────────────────
 tg "🔨 <b>[4/4]</b> Build started — go touch some grass 🌿"
  
 export BUILD_USERNAME=basit
@@ -80,27 +86,29 @@ export BUILD_HOSTNAME=crave
 export TZ="Asia/Karachi"
  
 source build/envsetup.sh
-lunch xdroid_apollo-userdebug
+lunch lineage_apollon-user
 make installclean
-make xd -j$(nproc --all)
+m bacon
  
-# Upload & notify
-ZIP=$(find out/target/product/apollo/ -maxdepth 1 -name "*.zip" | head -1)
- 
-if [ -n "$ZIP" ]; then
-    tg "✅ <b>Build Successful!</b>
-📁 $(basename $ZIP)
+# ── Upload & notify ───────────────────────────────────────────────────────────
+for file in out/target/product/apollo/*.zip; do
+    if [ -f "$file" ]; then
+        tg "✅ <b>Build Successful!</b>
+📁 $(basename $file)
 ⬆️ Uploading to Pixeldrain..."
  
-    LINK=$(upload_pixeldrain "$ZIP")
+        LINK=$(upload_pixeldrain "$file")
  
-    tg "📥 <b>Download Ready!</b>
-🔗 $LINK
+        tg "📥 <b>Download Ready!</b>
+🔗 ${LINK}
  
 Device: apollo (Mi 10T)
 ROM: XdroidCAF 12
 Built by: basit @ crave"
-else
-    tg "❌ <b>Build failed</b> — no zip found. Check Crave logs."
-    exit 1
-fi
+ 
+        mv "$file" ./
+    else
+        tg "❌ <b>Build failed</b> — no zip found. Check Crave logs."
+        exit 1
+    fi
+done
