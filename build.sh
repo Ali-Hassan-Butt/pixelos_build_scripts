@@ -23,7 +23,6 @@ upload_pixeldrain() {
         echo "https://pixeldrain.com/u/${FILE_ID}"
     else
         echo "Upload failed: $RESPONSE"
-        echo ""
     fi
 }
  
@@ -35,12 +34,14 @@ Time: $(date '+%Y-%m-%d %H:%M UTC')"
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 remove_lists=(
     .repo/local_manifests
+    device/xiaomi/apollon
     device/xiaomi/apollo
     device/xiaomi/sm8250-common
     device/qcom/sepolicy
     device/qcom/sepolicy-legacy-um
     device/qcom/sepolicy_vndr/legacy-um
     kernel/xiaomi/sm8250
+    out/target/product/apollon
     out/target/product/apollo
     vendor/xiaomi/apollo
     vendor/xiaomi/sm8250-common
@@ -49,10 +50,10 @@ remove_lists=(
 echo "-- Removing old artifacts..."
 rm -rf "${remove_lists[@]}"
  
-# ── libncurses symlink (needed for Android 12 builds) ─────────────────────────
+# ── libncurses symlink ─────────────────────────────────────────────────────────
 sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5
 sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6   /usr/lib/x86_64-linux-gnu/libtinfo.so.5
-echo "lib6 >> lib5 symlinks done"
+echo "lib6 >> lib5 done"
  
 # ── Repo init ─────────────────────────────────────────────────────────────────
 tg "📦 <b>[1/4]</b> Repo init..."
@@ -60,7 +61,6 @@ repo init --depth=1 --no-repo-verify --git-lfs \
     -u https://github.com/xdroid-CAF/xd_manifest \
     -b twelve \
     -g default,-mips,-darwin,-notdefault
-echo "Repo init success"
 tg "✅ <b>[1/4]</b> Repo init done"
  
 # ── Local manifests ───────────────────────────────────────────────────────────
@@ -69,14 +69,23 @@ git clone --depth=1 \
     https://github.com/Ali-Hassan-Butt/local_manifests_apollo \
     -b main \
     .repo/local_manifests
-echo "Local manifest clone success"
 tg "✅ <b>[2/4]</b> Local manifests cloned"
  
 # ── Sync ──────────────────────────────────────────────────────────────────────
 tg "🔄 <b>[3/4]</b> Syncing sources..."
 [ -f /usr/bin/resync ] && /usr/bin/resync || /opt/crave/resync.sh
-echo "Sync success"
 tg "✅ <b>[3/4]</b> Sync complete"
+ 
+# ── Create xdroid lunch target ────────────────────────────────────────────────
+# apollon tree has lineage_apollon.mk — wrap it for xdroid
+if [ ! -f "device/xiaomi/apollon/xdroid_apollon.mk" ]; then
+    cat > device/xiaomi/apollon/xdroid_apollon.mk << 'MKEOF'
+$(call inherit-product, device/xiaomi/apollon/lineage_apollon.mk)
+PRODUCT_NAME := xdroid_apollon
+XDROID_BOOT := 1080
+MKEOF
+    echo "Created xdroid_apollon.mk"
+fi
  
 # ── Build ─────────────────────────────────────────────────────────────────────
 tg "🔨 <b>[4/4]</b> Build started — go touch some grass 🌿"
@@ -86,12 +95,13 @@ export BUILD_HOSTNAME=crave
 export TZ="Asia/Karachi"
  
 source build/envsetup.sh
-lunch lineage_apollon-user
+lunch xdroid_apollon-userdebug
 make installclean
-m bacon
+make xd -j$(nproc --all)
  
 # ── Upload & notify ───────────────────────────────────────────────────────────
-for file in out/target/product/apollo/*.zip; do
+# wildcard catches both apollo and apollon output dirs
+for file in out/target/product/apollo*/*.zip; do
     if [ -f "$file" ]; then
         tg "✅ <b>Build Successful!</b>
 📁 $(basename $file)
@@ -107,8 +117,11 @@ ROM: XdroidCAF 12
 Built by: basit @ crave"
  
         mv "$file" ./
-    else
-        tg "❌ <b>Build failed</b> — no zip found. Check Crave logs."
-        exit 1
     fi
 done
+ 
+# Check if no zip was found
+if ! ls out/target/product/apollo*/*.zip 2>/dev/null | grep -q .; then
+    tg "❌ <b>Build failed</b> — no zip found. Check Crave logs."
+    exit 1
+fi
