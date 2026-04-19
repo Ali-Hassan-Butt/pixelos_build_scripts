@@ -71,12 +71,11 @@ tg "✅ <b>[2/4]</b> Local manifests cloned"
  
 # ── Sync ──────────────────────────────────────────────────────────────────────
 tg "🔄 <b>[3/4]</b> Syncing sources..."
-[ -f /usr/bin/resync ] && /usr/bin/resync || /opt/crave/resync.sh
+repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --prune
 echo "Sync success"
 tg "✅ <b>[3/4]</b> Sync complete"
  
 # ── Create xdroid lunch target ────────────────────────────────────────────────
-# apollon tree only has lineage_apollon.mk — create xdroid wrapper
 if [ ! -f "device/xiaomi/apollon/xdroid_apollon.mk" ]; then
     cat > device/xiaomi/apollon/xdroid_apollon.mk << 'MKEOF'
 $(call inherit-product, device/xiaomi/apollon/lineage_apollon.mk)
@@ -120,5 +119,4 @@ Built by: basit @ crave"
 else
     tg "❌ <b>Build failed</b> — no zip found. Check Crave logs."
     exit 1
-fi
 fi
