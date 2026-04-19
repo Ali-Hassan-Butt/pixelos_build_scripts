@@ -16,7 +16,6 @@ tg() {
 upload_pixeldrain() {
     local FILE="$1"
     local FILENAME=$(basename "$FILE")
-    echo "Uploading to Pixeldrain..."
     RESPONSE=$(curl -s -T "$FILE" -u : "https://pixeldrain.com/api/file/${FILENAME}")
     FILE_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
     if [ -n "$FILE_ID" ]; then
@@ -27,33 +26,30 @@ upload_pixeldrain() {
 }
  
 tg "🚀 <b>Build Started</b>
-Device: apollo (Xiaomi Mi 10T)
+Device: apollon (Xiaomi Mi 10T)
 ROM: XdroidCAF 12
 Time: $(date '+%Y-%m-%d %H:%M UTC')"
  
 # ── Cleanup ───────────────────────────────────────────────────────────────────
-remove_lists=(
-    .repo/local_manifests
-    device/xiaomi/apollon
-    device/xiaomi/apollo
-    device/xiaomi/sm8250-common
-    device/qcom/sepolicy
-    device/qcom/sepolicy-legacy-um
-    device/qcom/sepolicy_vndr/legacy-um
-    kernel/xiaomi/sm8250
-    out/target/product/apollon
-    out/target/product/apollo
-    vendor/xiaomi/apollo
+echo "-- Cleaning up..."
+rm -rf \
+    .repo/local_manifests \
+    device/xiaomi/apollon \
+    device/xiaomi/apollo \
+    device/xiaomi/sm8250-common \
+    device/qcom/sepolicy \
+    device/qcom/sepolicy-legacy-um \
+    device/qcom/sepolicy_vndr/legacy-um \
+    kernel/xiaomi/sm8250 \
+    out/target/product/apollon \
+    out/target/product/apollo \
+    vendor/xiaomi/apollo \
     vendor/xiaomi/sm8250-common
-)
  
-echo "-- Removing old artifacts..."
-rm -rf "${remove_lists[@]}"
- 
-# ── libncurses symlink ─────────────────────────────────────────────────────────
+# ── libncurses symlink (required for Android 12) ──────────────────────────────
 sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5
 sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6   /usr/lib/x86_64-linux-gnu/libtinfo.so.5
-echo "lib6 >> lib5 done"
+echo "lib6 >> lib5 symlinks done"
  
 # ── Repo init ─────────────────────────────────────────────────────────────────
 tg "📦 <b>[1/4]</b> Repo init..."
@@ -61,23 +57,26 @@ repo init --depth=1 --no-repo-verify --git-lfs \
     -u https://github.com/xdroid-CAF/xd_manifest \
     -b twelve \
     -g default,-mips,-darwin,-notdefault
+echo "Repo init success"
 tg "✅ <b>[1/4]</b> Repo init done"
  
 # ── Local manifests ───────────────────────────────────────────────────────────
 tg "📋 <b>[2/4]</b> Cloning local manifests..."
 git clone --depth=1 \
-    https://github.com/Ali-Hassan-Butt/local_manifests_apollo \
     -b main \
+    https://github.com/Ali-Hassan-Butt/local_manifests_apollo \
     .repo/local_manifests
+echo "Local manifest clone success"
 tg "✅ <b>[2/4]</b> Local manifests cloned"
  
 # ── Sync ──────────────────────────────────────────────────────────────────────
 tg "🔄 <b>[3/4]</b> Syncing sources..."
 [ -f /usr/bin/resync ] && /usr/bin/resync || /opt/crave/resync.sh
+echo "Sync success"
 tg "✅ <b>[3/4]</b> Sync complete"
  
 # ── Create xdroid lunch target ────────────────────────────────────────────────
-# apollon tree has lineage_apollon.mk — wrap it for xdroid
+# apollon tree only has lineage_apollon.mk — create xdroid wrapper
 if [ ! -f "device/xiaomi/apollon/xdroid_apollon.mk" ]; then
     cat > device/xiaomi/apollon/xdroid_apollon.mk << 'MKEOF'
 $(call inherit-product, device/xiaomi/apollon/lineage_apollon.mk)
@@ -100,28 +99,26 @@ make installclean
 make xd -j$(nproc --all)
  
 # ── Upload & notify ───────────────────────────────────────────────────────────
-# wildcard catches both apollo and apollon output dirs
-for file in out/target/product/apollo*/*.zip; do
-    if [ -f "$file" ]; then
-        tg "✅ <b>Build Successful!</b>
-📁 $(basename $file)
+ZIP=$(find out/target/product/apollon/ out/target/product/apollo/ \
+    -maxdepth 1 -name "*.zip" 2>/dev/null | head -1)
+ 
+if [ -n "$ZIP" ]; then
+    tg "✅ <b>Build Successful!</b>
+📁 $(basename $ZIP)
 ⬆️ Uploading to Pixeldrain..."
  
-        LINK=$(upload_pixeldrain "$file")
+    LINK=$(upload_pixeldrain "$ZIP")
  
-        tg "📥 <b>Download Ready!</b>
+    tg "📥 <b>Download Ready!</b>
 🔗 ${LINK}
  
-Device: apollo (Mi 10T)
+Device: apollon (Mi 10T)
 ROM: XdroidCAF 12
 Built by: basit @ crave"
  
-        mv "$file" ./
-    fi
-done
- 
-# Check if no zip was found
-if ! ls out/target/product/apollo*/*.zip 2>/dev/null | grep -q .; then
+    mv "$ZIP" ./
+else
     tg "❌ <b>Build failed</b> — no zip found. Check Crave logs."
     exit 1
+fi
 fi
