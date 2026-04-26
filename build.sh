@@ -60,9 +60,33 @@ tg "🔄 <b>[2/4]</b> Syncing..."
 rm -rf packages/apps/Trebuchet
 
 # Fix 2: Remove conflicting CAF display HALs
+# ── Display: keep ONLY sm8250, nuke everything else that conflicts ────────────
+rm -rf hardware/qcom-caf/sdm660/display
+rm -rf hardware/qcom-caf/sdm845/display
+rm -rf hardware/qcom-caf/msm8953/display
+rm -rf hardware/qcom-caf/msm8996/display
+rm -rf hardware/qcom-caf/msm8998/display
+rm -rf hardware/qcom-caf/sm8150/display
 rm -rf hardware/qcom-caf/sm8350/display
 rm -rf hardware/qcom-caf/sm8450/display
 rm -rf hardware/qcom-caf/sm8550/display
+
+# ── Audio adsprpcd: keep sm8150, remove duplicates ───────────────────────────
+rm -rf hardware/qcom-caf/sm8250/audio/adsprpcd
+rm -rf hardware/qcom-caf/sm8350/audio/adsprpcd
+rm -rf hardware/qcom-caf/sdm660/audio/adsprpcd
+rm -rf hardware/qcom-caf/sdm845/audio/adsprpcd
+rm -rf hardware/qcom-caf/msm8953/audio/adsprpcd
+rm -rf hardware/qcom-caf/sm8450/audio/primary-hal/adsprpcd
+rm -rf hardware/qcom-caf/sm8550/audio/primary-hal/adsprpcd
+
+# ── Audio PAL/AGM: sm8450 and sm8550 conflict, keep sm8450 ───────────────────
+rm -rf hardware/qcom-caf/sm8550/audio/pal
+rm -rf hardware/qcom-caf/sm8550/audio/agm
+
+# ── Trebuchet vs Launcher3 ────────────────────────────────────────────────────
+rm -rf packages/apps/Trebuchet
+
 tg "✅ <b>[2/4]</b> Sync done"
 
 # ── Clone device trees ────────────────────────────────────────────────────────
