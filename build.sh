@@ -55,6 +55,14 @@ tg "✅ <b>[1/4]</b> Repo init done"
 # ── Sync ──────────────────────────────────────────────────────────────────────
 tg "🔄 <b>[2/4]</b> Syncing..."
 /opt/crave/resync.sh
+
+# Fix 1: Remove Trebuchet (conflicts with Launcher3)
+rm -rf packages/apps/Trebuchet
+
+# Fix 2: Remove conflicting CAF display HALs
+rm -rf hardware/qcom-caf/sm8350/display
+rm -rf hardware/qcom-caf/sm8450/display
+rm -rf hardware/qcom-caf/sm8550/display
 tg "✅ <b>[2/4]</b> Sync done"
 
 # ── Clone device trees ────────────────────────────────────────────────────────
