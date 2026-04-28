@@ -3,7 +3,7 @@ set -o pipefail
 
 # ============================================================
 #  Corvus-AOSP 13 — Xiaomi Mi 10T (apollon)
-#  Written by the book — verified sources only
+#  Optimized for Crave & SM8250
 # ============================================================
 
 DEVICE="apollon"
@@ -75,10 +75,10 @@ rm -rf .repo/local_manifests \
     vendor/xiaomi/apollon \
     vendor/xiaomi/sm8250-common \
     hardware/xiaomi \
+    hardware/qcom-caf/bootctrl \
     out/target/product/apollon
 
 # ================= REPO INIT =================
-# Branch 13 README uses GitLab SSH — use GitHub HTTPS equivalent
 echo ">>>> [2] Repo Init"
 repo init --depth=1 --no-repo-verify --git-lfs \
     -u https://github.com/Corvus-AOSP/android_manifest.git \
@@ -88,14 +88,14 @@ repo init --depth=1 --no-repo-verify --git-lfs \
 # ================= SYNC =================
 echo ">>>> [3] Sync"
 if [ -f /opt/crave/resync.sh ]; then
+    # Force reset to prevent webview/chromium sync errors
+    repo forall -c 'git reset --hard ; git clean -fdx'
     /opt/crave/resync.sh
 else
     repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all)
 fi
 
 # ================= DEVICE TREES =================
-# Source: lineage.dependencies confirms only sm8250-common is needed
-# Org: xiaomi-sm8250-devs (confirmed branch: lineage-20)
 echo ">>>> [4] Clone Trees"
 
 git clone https://github.com/xiaomi-sm8250-devs/android_device_xiaomi_apollon \
@@ -115,72 +115,62 @@ git clone https://github.com/TheMuppets/proprietary_vendor_xiaomi_sm8250-common 
 git clone https://github.com/LineageOS/android_kernel_xiaomi_sm8250 \
     -b lineage-20 --depth=1 kernel/xiaomi/sm8250
 
-# Required by sm8250-common (confirmed in lineage.dependencies)
+# Hardware Dependencies
 git clone https://github.com/LineageOS/android_hardware_xiaomi \
     -b lineage-20 --depth=1 hardware/xiaomi
+
+git clone https://github.com/LineageOS/android_hardware_qcom_bootctrl \
+    -b lineage-20 --depth=1 hardware/qcom-caf/bootctrl
 
 echo "Trees cloned."
 
 # ================= CORVUS PRODUCT SETUP =================
 echo ">>>> [5] Setup Corvus product"
 
-# Create corvus_apollon.mk inheriting from the lineage tree
+# Patch Lineage paths to Corvus paths in device trees
+find device/xiaomi/apollon -type f -name "*.mk" -exec sed -i 's/vendor\/lineage/vendor\/corvus/g' {} +
+find device/xiaomi/sm8250-common -type f -name "*.mk" -exec sed -i 's/vendor\/lineage/vendor\/corvus/g' {} +
+
+# Create corvus_apollon.mk
 cat > device/xiaomi/apollon/corvus_apollon.mk << 'MKEOF'
 $(call inherit-product, device/xiaomi/apollon/lineage_apollon.mk)
+$(call inherit-product, vendor/corvus/config/common.mk)
 
 PRODUCT_NAME := corvus_apollon
 PRODUCT_BRAND := Xiaomi
 PRODUCT_MODEL := Xiaomi Mi 10T
+PRODUCT_DEVICE := apollon
 
 CORVUS_BUILD_TYPE := UNOFFICIAL
 MKEOF
 
-# Rewrite AndroidProducts.mk properly to register corvus_apollon.mk
-# The original only has lineage_apollon.mk — we add corvus alongside it
+# Update AndroidProducts.mk
 cat > device/xiaomi/apollon/AndroidProducts.mk << 'MKEOF'
-#
-# Copyright (C) 2021 The LineageOS Project
-#
-# SPDX-License-Identifier: Apache-2.0
-#
-
 PRODUCT_MAKEFILES := \
     $(LOCAL_DIR)/lineage_apollon.mk \
     $(LOCAL_DIR)/corvus_apollon.mk
 
 COMMON_LUNCH_CHOICES := \
-    lineage_apollon-user \
     lineage_apollon-userdebug \
-    lineage_apollon-eng \
-    corvus_apollon-user \
-    corvus_apollon-userdebug \
-    corvus_apollon-eng
+    corvus_apollon-userdebug
 MKEOF
 
-echo "Product files written."
+echo "Product files written and patched."
 
 # ================= CONFLICT FIXES =================
-# Corvus manifest pulls ALL CAF chipset display/audio stacks — they conflict
-# SM8250 only needs its own stack
 echo ">>>> [6] Remove conflicting CAF modules"
 
-# Display — keep sm8250 only
 for CHIP in sdm660 sdm845 msm8953 msm8996 msm8998 sm8150 sm8350 sm8450 sm8550; do
     rm -rf hardware/qcom-caf/${CHIP}/display
 done
 
-# Audio adsprpcd — keep sm8150 baseline, remove all duplicates
 for CHIP in sm8250 sm8350 sdm660 sdm845 msm8953; do
     rm -rf hardware/qcom-caf/${CHIP}/audio/adsprpcd
 done
 rm -rf hardware/qcom-caf/sm8450/audio/primary-hal/adsprpcd
 rm -rf hardware/qcom-caf/sm8550/audio/primary-hal/adsprpcd
-
-# Audio PAL/AGM — sm8550 conflicts with sm8450
 rm -rf hardware/qcom-caf/sm8550/audio/pal
 rm -rf hardware/qcom-caf/sm8550/audio/agm
-
-# Launcher conflict
 rm -rf packages/apps/Trebuchet
 
 echo "Conflicts resolved."
@@ -194,9 +184,10 @@ export TZ="Asia/Karachi"
 
 source build/envsetup.sh
 lunch corvus_apollon-userdebug
-make installclean
+m installclean
 
-make corvus -j$(nproc --all) 2>&1 | tee "$BUILD_LOG"
+# Using mka for optimized build handling on Crave
+mka corvus 2>&1 | tee "$BUILD_LOG"
 
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     on_fail
@@ -213,7 +204,7 @@ DUR=$((END_TIME - START_TIME))
 echo ""
 echo "============================================"
 echo "✅ BUILD SUCCESSFUL"
-echo "   Time: $((DUR/3600))h $(((DUR%3600)/60))min $((DUR%60))sec"
+echo "    Time: $((DUR/3600))h $(((DUR%3600)/60))min $((DUR%60))sec"
 echo "============================================"
 
 ROM_ZIP=$(ls -t ${OUT_DIR}/*.zip 2>/dev/null | head -n 1)
@@ -227,7 +218,7 @@ if [ -n "$ROM_ZIP" ]; then
     GO_URL=$(gofile_upload "$ROM_ZIP")
     PD_URL=$(pixeldrain_upload "$ROM_ZIP")
 
-    echo "  GoFile:     ${GO_URL}"
+    echo "  GoFile:      ${GO_URL}"
     echo "  PixelDrain: ${PD_URL}"
 
     for IMG in boot.img vendor_boot.img init_boot.img recovery.img; do
