@@ -82,6 +82,24 @@ repo init --depth=1 --no-repo-verify --git-lfs \
     -b 13 \
     -g default,-mips,-darwin,-notdefault
 
+# ================= LOCAL MANIFEST =================
+# Inject vendor/corvus via local_manifests so Crave's resync.sh fetches it
+# properly alongside the base sync. Manual git clone was unreliable — the Crave
+# cache would either conflict with the directory or use a stale revision.
+echo ">>>> [2b] Inject local manifest for vendor/corvus"
+mkdir -p .repo/local_manifests
+cat > .repo/local_manifests/corvus_extras.xml << 'XMLEOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="corvus-gh" fetch="https://github.com/Corvus-AOSP/" />
+  <project name="vendor_corvus"
+           path="vendor/corvus"
+           remote="corvus-gh"
+           revision="13"
+           clone-depth="1" />
+</manifest>
+XMLEOF
+
 # ================= SYNC =================
 echo ">>>> [3] Sync"
 if [ -f /opt/crave/resync.sh ]; then
@@ -90,6 +108,16 @@ if [ -f /opt/crave/resync.sh ]; then
 else
     repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all)
 fi
+
+# Hard stop if vendor/corvus didn't come through — print what's there for debugging
+if [ ! -f vendor/corvus/config/corvus.mk ]; then
+    echo "❌ FATAL: vendor/corvus/config/corvus.mk missing after sync"
+    echo "   .mk files found in vendor/corvus (if any):"
+    find vendor/corvus -maxdepth 4 -name "*.mk" 2>/dev/null | head -20 \
+        || echo "   (vendor/corvus does not exist at all)"
+    on_fail
+fi
+echo "✅ vendor/corvus/config/corvus.mk confirmed"
 
 # ================= DEVICE TREES =================
 echo ">>>> [4] Clone Trees"
@@ -109,15 +137,7 @@ git clone https://github.com/LineageOS/android_kernel_xiaomi_sm8250 \
 git clone https://github.com/LineageOS/android_hardware_xiaomi \
     -b lineage-20 --depth=1 hardware/xiaomi
 
-# FIX 1: vendor/corvus is not pulled by Crave's resync.sh — clone it explicitly.
-# The Corvus-AOSP vendor config lives in a separate repo not covered by the manifest cache.
-git clone https://github.com/Corvus-AOSP/vendor_corvus \
-    -b 13 --depth=1 vendor/corvus || {
-    echo "❌ FATAL: vendor/corvus clone failed — cannot build without it"
-    on_fail
-}
-
-# FIX 2: bootctrl — try known valid branches in order, non-fatal if all fail
+# bootctrl — try known valid branches in order, non-fatal if all fail
 # (the Corvus manifest may provide it via hardware/qcom-caf/sm8250 instead)
 BOOTCTRL_CLONED=false
 for BRANCH in lineage-20 lineage-20.0 lineage-21 master; do
