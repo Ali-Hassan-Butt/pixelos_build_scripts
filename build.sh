@@ -1,219 +1,77 @@
 #!/bin/bash
-set -o pipefail
 
-# ================= TIMEZONE =================
-sudo rm -f /etc/localtime
-sudo ln -s /usr/share/zoneinfo/Asia/Karachi /etc/localtime
-echo "🕒 Time: $(date)"
+# 1. Update and install dependencies
+sudo apt update
+sudo apt install patchelf -y
 
-# ================= JQ =================
-if ! command -v jq &> /dev/null; then
-    mkdir -p ~/bin
-    curl -L -o ~/bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7/jq-linux64
-    chmod +x ~/bin/jq
-    export PATH=$HOME/bin:$PATH
-fi
+# 2. Clean up old SM8250/apollo trees
+echo "🧹 Cleaning up old directories..."
+rm -rf .repo/local_manifests/
+rm -rf device/xiaomi/apollo
+rm -rf device/xiaomi/sm8250-common
+rm -rf vendor/xiaomi/apollo
+rm -rf vendor/xiaomi/sm8250-common
+rm -rf kernel/xiaomi/sm8250
+rm -rf hardware/xiaomi
+rm -rf hardware/qcom-caf/sm8250
 
-# ================= CONFIGS =================
-DEVICE="apollon"
-OUT_DIR="out/target/product/${DEVICE}"
-START_TIME=$(date +%s)
-BUILD_LOG="build.log"
-ERROR_LOG="out/error.log"
+# 3. Initialize CorvusOS 13 manifest
+echo "📦 Initializing CorvusOS 13 manifest..."
+repo init -u https://github.com/Corvus-ROM/android_manifest.git -b 13.0 --depth=1 --git-lfs
 
-# ================= PIXELDRAIN =================
-upload_pixeldrain() {
-    local FILE="$1"
-    if [ -f "$FILE" ]; then
-        RESPONSE=$(curl -s -T "$FILE" -u : "https://pixeldrain.com/api/file/$(basename $FILE)")
-        FILE_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
-        if [ -n "$FILE_ID" ]; then
-            echo "https://pixeldrain.com/u/$FILE_ID"
-        else
-            echo "Upload failed: $RESPONSE"
-        fi
-    fi
-}
+# 4. Generate local_manifests for apollo
+echo "📝 Writing apollo local_manifest.xml..."
+mkdir -p .repo/local_manifests
 
-# ================= GOFILE =================
-gofile_upload() {
-    local FILE="$1"
-    mapfile -t SERVERS < <(curl -s https://api.gofile.io/servers | jq -r '.data.servers[].name')
-    for S in $(printf "%s\n" "${SERVERS[@]}" | shuf); do
-        RESP=$(curl -s -F "file=@${FILE}" "https://${S}.gofile.io/uploadFile")
-        LINK=$(echo "$RESP" | jq -r '.data.downloadPage // empty')
-        if [ -n "$LINK" ]; then
-            echo "$LINK"
-            return
-        fi
-    done
-    echo ""
-}
+cat << 'EOF' > .repo/local_manifests/apollo.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+    <project path="device/xiaomi/apollo" name="your-username/android_device_xiaomi_apollo" remote="github" revision="corvus-13" />
+    <project path="device/xiaomi/sm8250-common" name="your-username/android_device_xiaomi_sm8250-common" remote="github" revision="corvus-13" />
 
-# ================= ON FAIL =================
-on_fail() {
-    echo "❌ BUILD FAILED"
-    echo "Uploading logs..."
+    <project path="vendor/xiaomi/apollo" name="your-username/android_vendor_xiaomi_apollo" remote="github" revision="corvus-13" />
+    <project path="vendor/xiaomi/sm8250-common" name="your-username/android_vendor_xiaomi_sm8250-common" remote="github" revision="corvus-13" />
 
-    [ -f "$ERROR_LOG" ] && echo "Error log: $(gofile_upload $ERROR_LOG)"
-    [ -f "$BUILD_LOG" ] && echo "Build log: $(gofile_upload $BUILD_LOG)"
+    <project path="kernel/xiaomi/sm8250" name="your-username/android_kernel_xiaomi_sm8250_e404_clo" remote="github" revision="main" />
 
-    exit 1
-}
+    <project path="hardware/xiaomi" name="LineageOS/android_hardware_xiaomi" remote="github" revision="lineage-20" />
+    
+    </manifest>
+EOF
 
-echo "============================================"
-echo "  Corvus-AOSP | apollon (Mi 10T) | A13"
-echo "  $(date '+%Y-%m-%d %H:%M PKT')"
-echo "============================================"
+# 5. Sync sources using Crave
+echo "🔄 Syncing sources via Crave..."
+/opt/crave/resync.sh
 
-# ================= CLEANUP =================
-echo ">>>> [STEP] Cleanup"
-rm -rf .repo/local_manifests
-
-rm -rf \
-    device/xiaomi/apollon \
-    device/xiaomi/sm8250-common \
-    kernel/xiaomi/sm8250 \
-    vendor/xiaomi/apollon \
-    vendor/xiaomi/sm8250-common \
-    out/target/product/apollon
-
-# ================= LIBNCURSES =================
-sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5
-sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6   /usr/lib/x86_64-linux-gnu/libtinfo.so.5
-
-# ================= REPO INIT =================
-echo ">>>> [STEP] Repo Init"
-repo init --depth=1 --no-repo-verify --git-lfs \
-    -u https://github.com/Corvus-AOSP/android_manifest.git \
-    -b 13 \
-    -g default,-mips,-darwin,-notdefault
-
-# ================= SYNC =================
-echo ">>>> [STEP] Sync"
-if [ -f /opt/crave/resync.sh ]; then
-    /opt/crave/resync.sh
-else
-    repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all)
-fi
-
-# ================= DEVICE TREES =================
-echo ">>>> [STEP] Clone Trees"
-
-# Fixed: lineage-20 (not lineage-20.0)
-git clone https://github.com/LineageOS/android_device_xiaomi_apollon \
-    -b lineage-20 --depth=1 device/xiaomi/apollon
-
-git clone https://github.com/LineageOS/android_device_xiaomi_sm8250-common \
-    -b lineage-20 --depth=1 device/xiaomi/sm8250-common
-
-git clone https://github.com/xiaomi-sm8250-devs/proprietary_vendor_xiaomi_apollon \
-    -b lineage-20 --depth=1 vendor/xiaomi/apollon
-
-git clone https://github.com/TheMuppets/proprietary_vendor_xiaomi_sm8250-common \
-    -b lineage-20 --depth=1 vendor/xiaomi/sm8250-common
-
-git clone https://github.com/LineageOS/android_kernel_xiaomi_sm8250 \
-    -b lineage-20 --depth=1 kernel/xiaomi/sm8250
-
-echo "Trees cloned successfully"
-
-# ================= FIXES =================
-echo ">>>> [STEP] Apply Fixes"
-
-# Display: keep ONLY sm8250, remove all conflicting stacks
-rm -rf hardware/qcom-caf/sdm660/display
-rm -rf hardware/qcom-caf/sdm845/display
-rm -rf hardware/qcom-caf/msm8953/display
-rm -rf hardware/qcom-caf/msm8996/display
-rm -rf hardware/qcom-caf/msm8998/display
-rm -rf hardware/qcom-caf/sm8150/display
-rm -rf hardware/qcom-caf/sm8350/display
-rm -rf hardware/qcom-caf/sm8450/display
-rm -rf hardware/qcom-caf/sm8550/display
-
-# Audio adsprpcd: keep sm8150, remove duplicates
-rm -rf hardware/qcom-caf/sm8250/audio/adsprpcd
-rm -rf hardware/qcom-caf/sm8350/audio/adsprpcd
-rm -rf hardware/qcom-caf/sdm660/audio/adsprpcd
-rm -rf hardware/qcom-caf/sdm845/audio/adsprpcd
-rm -rf hardware/qcom-caf/msm8953/audio/adsprpcd
-rm -rf hardware/qcom-caf/sm8450/audio/primary-hal/adsprpcd
-rm -rf hardware/qcom-caf/sm8550/audio/primary-hal/adsprpcd
-
-# Audio PAL/AGM: sm8550 conflicts with sm8450, keep sm8450
-rm -rf hardware/qcom-caf/sm8550/audio/pal
-rm -rf hardware/qcom-caf/sm8550/audio/agm
-
-# Trebuchet conflicts with Launcher3
-rm -rf packages/apps/Trebuchet
-
-# Create Corvus lunch target (mkdir -p ensures dir exists even if clone was slow)
-mkdir -p device/xiaomi/apollon
-cat > device/xiaomi/apollon/corvus_apollon.mk << 'MKEOF'
-$(call inherit-product, device/xiaomi/apollon/lineage_apollon.mk)
-
-PRODUCT_NAME := corvus_apollon
-PRODUCT_BRAND := Xiaomi
-PRODUCT_MODEL := Xiaomi Mi 10T
-
-CORVUS_BUILD_TYPE := UNOFFICIAL
-MKEOF
-
-echo "Created corvus_apollon.mk"
-
-# ================= BUILD =================
-echo ">>>> [STEP] Build"
-
-export BUILD_USERNAME=basit
-export BUILD_HOSTNAME=crave
-export TZ="Asia/Karachi"
-
+# 6. Set up build environment
+echo "🛠️ Setting up environment..."
 source build/envsetup.sh
-lunch corvus_apollon-userdebug
-make installclean
 
-make corvus -j$(nproc --all) 2>&1 | tee "$BUILD_LOG"
+# 7. Apply ADB/Debugging props to the apollo makefile
+FILE="device/xiaomi/apollo/apollo.mk"
 
-if [ "${PIPESTATUS[0]}" -ne 0 ]; then
-    on_fail
+if [ -f "$FILE" ]; then
+    grep -q "ro.adb.secure=0" "$FILE" || cat >> "$FILE" <<'EOF'
+
+# Auto-added ADB debug props
+PRODUCT_SYSTEM_PROPERTIES += \
+    ro.adb.secure=0 \
+    ro.secure=0 \
+    ro.debuggable=1 \
+    persist.sys.usb.config=mtp,adb
+EOF
+    echo "✅ Injected ADB debug props into $FILE"
 fi
 
-if grep -q -E "ninja failed|failed to build some targets" "$BUILD_LOG"; then
-    on_fail
-fi
+# 8. Set build environment variables
+export BUILD_USERNAME=basit
+export TARGET_ENABLE_BLUR=true 
+export WITH_ADB_INSECURE=true
+export SELINUX_IGNORE_NEVERALLOWS=true
 
-# ================= SUCCESS =================
-END_TIME=$(date +%s)
-DUR=$((END_TIME - START_TIME))
+# 9. Lunch and Build
+echo "🚀 Lunching apollo..."
+lunch corvus_apollo-userdebug
 
-echo "============================================"
-echo "✅ BUILD SUCCESSFUL"
-echo "Time: $((DUR/3600))h $(((DUR%3600)/60))min"
-echo "============================================"
-
-ROM_ZIP=$(ls -t ${OUT_DIR}/*.zip 2>/dev/null | head -n 1)
-
-if [ -n "$ROM_ZIP" ]; then
-    BUILD_ID=$(basename "$ROM_ZIP" .zip)
-    ROM_SIZE=$(du -h "$ROM_ZIP" | awk '{print $1}')
-    echo "ZIP: $BUILD_ID ($ROM_SIZE)"
-
-    # ================= UPLOAD =================
-    echo ">>>> [STEP] Upload"
-
-    GO_URL=$(gofile_upload "$ROM_ZIP")
-    PD_URL=$(upload_pixeldrain "$ROM_ZIP")
-
-    echo "GoFile:     $GO_URL"
-    echo "PixelDrain: $PD_URL"
-
-    # Individual images
-    for IMG in boot.img vendor_boot.img init_boot.img recovery.img; do
-        FILE="${OUT_DIR}/${IMG}"
-        if [ -f "$FILE" ]; then
-            URL=$(gofile_upload "$FILE")
-            echo "$IMG: $URL"
-        fi
-    done
-fi
+echo "🏗️ Starting CorvusOS build..."
+mka bacon 2>&1 | tee build1.log && curl -F "file=@build1.log" https://temp.sh/upload
