@@ -68,6 +68,7 @@ rm -rf .repo/local_manifests \
     device/xiaomi/apollon \
     device/xiaomi/sm8250-common \
     kernel/xiaomi/sm8250 \
+    vendor/corvus \
     vendor/xiaomi/apollon \
     vendor/xiaomi/sm8250-common \
     hardware/xiaomi \
@@ -108,10 +109,28 @@ git clone https://github.com/LineageOS/android_kernel_xiaomi_sm8250 \
 git clone https://github.com/LineageOS/android_hardware_xiaomi \
     -b lineage-20 --depth=1 hardware/xiaomi
 
-# FIX 1: lineage-20 branch doesn't exist in this repo; use lineage-20.0
-git clone https://github.com/LineageOS/android_hardware_qcom_bootctrl \
-    -b lineage-20.0 --depth=1 hardware/qcom-caf/bootctrl \
-    || echo "⚠ WARNING: bootctrl clone failed — Corvus manifest may already provide it, continuing..."
+# FIX 1: vendor/corvus is not pulled by Crave's resync.sh — clone it explicitly.
+# The Corvus-AOSP vendor config lives in a separate repo not covered by the manifest cache.
+git clone https://github.com/Corvus-AOSP/vendor_corvus \
+    -b 13 --depth=1 vendor/corvus || {
+    echo "❌ FATAL: vendor/corvus clone failed — cannot build without it"
+    on_fail
+}
+
+# FIX 2: bootctrl — try known valid branches in order, non-fatal if all fail
+# (the Corvus manifest may provide it via hardware/qcom-caf/sm8250 instead)
+BOOTCTRL_CLONED=false
+for BRANCH in lineage-20 lineage-20.0 lineage-21 master; do
+    if git clone https://github.com/LineageOS/android_hardware_qcom_bootctrl \
+        -b "$BRANCH" --depth=1 hardware/qcom-caf/bootctrl 2>/dev/null; then
+        echo "✅ bootctrl cloned from branch: $BRANCH"
+        BOOTCTRL_CLONED=true
+        break
+    fi
+done
+if [ "$BOOTCTRL_CLONED" = false ]; then
+    echo "⚠ WARNING: bootctrl clone failed on all branches — will rely on synced tree"
+fi
 
 echo "Trees cloned."
 
@@ -143,11 +162,17 @@ COMMON_LUNCH_CHOICES := \
     corvus_apollon-userdebug
 MKEOF
 
-# FIX 2: Stub common.mk if Corvus vendor tree references it but didn't ship it.
-# corvus.mk calls inherit-product on common.mk; create it if missing so lunch doesn't abort.
+# Stub common.mk if corvus.mk references it but it wasn't shipped in this tree revision.
 if [ -d vendor/corvus/config ] && [ ! -f vendor/corvus/config/common.mk ]; then
     echo "⚠ WARNING: vendor/corvus/config/common.mk missing — creating stub"
     touch vendor/corvus/config/common.mk
+fi
+
+# Also remove hardware/qcom-caf/bootctrl from SOONG_NAMESPACES if it wasn't cloned,
+# to avoid a Soong "path does not exist" error at build time.
+if [ ! -d hardware/qcom-caf/bootctrl ]; then
+    sed -i '/hardware\/qcom-caf\/bootctrl/d' device/xiaomi/apollon/corvus_apollon.mk
+    echo "⚠ bootctrl namespace removed from corvus_apollon.mk (dir missing)"
 fi
 
 echo "Product files written and patched."
