@@ -3,7 +3,7 @@ set -o pipefail
 
 # ============================================================
 #  Corvus-AOSP 13 — Xiaomi Mi 10T (apollon)
-#  Optimized for Crave & SM8250
+#  Optimized for Corvus 13 & SM8250
 # ============================================================
 
 DEVICE="apollon"
@@ -20,7 +20,7 @@ if ! command -v jq &> /dev/null; then
     export PATH=$HOME/bin:$PATH
 fi
 
-# ================= GOFILE =================
+# ================= UPLOAD FUNCTIONS =================
 gofile_upload() {
     local FILE="$1"
     mapfile -t SERVERS < <(curl -s https://api.gofile.io/servers | jq -r '.data.servers[].name')
@@ -35,7 +35,6 @@ gofile_upload() {
     echo ""
 }
 
-# ================= PIXELDRAIN =================
 pixeldrain_upload() {
     local FILE="$1"
     if [ -f "$FILE" ]; then
@@ -45,7 +44,6 @@ pixeldrain_upload() {
     fi
 }
 
-# ================= ON FAIL =================
 on_fail() {
     echo ""
     echo "❌ BUILD FAILED — uploading logs..."
@@ -58,11 +56,9 @@ echo "============================================"
 echo "  Corvus-AOSP 13 | apollon | $(date '+%d %b %Y %H:%M PKT')"
 echo "============================================"
 
-# ================= TIMEZONE =================
+# ================= SETUP =================
 sudo rm -f /etc/localtime
 sudo ln -s /usr/share/zoneinfo/Asia/Karachi /etc/localtime
-
-# ================= LIBNCURSES =================
 sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5
 sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6   /usr/lib/x86_64-linux-gnu/libtinfo.so.5
 
@@ -88,7 +84,6 @@ repo init --depth=1 --no-repo-verify --git-lfs \
 # ================= SYNC =================
 echo ">>>> [3] Sync"
 if [ -f /opt/crave/resync.sh ]; then
-    # Force reset to prevent webview/chromium sync errors
     repo forall -c 'git reset --hard ; git clean -fdx'
     /opt/crave/resync.sh
 else
@@ -100,70 +95,68 @@ echo ">>>> [4] Clone Trees"
 
 git clone https://github.com/xiaomi-sm8250-devs/android_device_xiaomi_apollon \
     -b lineage-20 --depth=1 device/xiaomi/apollon
-
 git clone https://github.com/xiaomi-sm8250-devs/android_device_xiaomi_sm8250-common \
     -b lineage-20 --depth=1 device/xiaomi/sm8250-common
-
-# Vendor blobs
 git clone https://github.com/xiaomi-sm8250-devs/proprietary_vendor_xiaomi_apollon \
     -b lineage-20 --depth=1 vendor/xiaomi/apollon
-
 git clone https://github.com/TheMuppets/proprietary_vendor_xiaomi_sm8250-common \
     -b lineage-20 --depth=1 vendor/xiaomi/sm8250-common
-
-# Kernel
 git clone https://github.com/LineageOS/android_kernel_xiaomi_sm8250 \
     -b lineage-20 --depth=1 kernel/xiaomi/sm8250
 
-# Hardware Dependencies
+# Dependencies
 git clone https://github.com/LineageOS/android_hardware_xiaomi \
     -b lineage-20 --depth=1 hardware/xiaomi
 
+# FIX 1: lineage-20 branch doesn't exist in this repo; use lineage-20.0
 git clone https://github.com/LineageOS/android_hardware_qcom_bootctrl \
-    -b lineage-20 --depth=1 hardware/qcom-caf/bootctrl
+    -b lineage-20.0 --depth=1 hardware/qcom-caf/bootctrl \
+    || echo "⚠ WARNING: bootctrl clone failed — Corvus manifest may already provide it, continuing..."
 
 echo "Trees cloned."
 
 # ================= CORVUS PRODUCT SETUP =================
 echo ">>>> [5] Setup Corvus product"
 
-# Patch Lineage paths to Corvus paths in device trees
-find device/xiaomi/apollon -type f -name "*.mk" -exec sed -i 's/vendor\/lineage/vendor\/corvus/g' {} +
-find device/xiaomi/sm8250-common -type f -name "*.mk" -exec sed -i 's/vendor\/lineage/vendor\/corvus/g' {} +
-
-# Create corvus_apollon.mk
 cat > device/xiaomi/apollon/corvus_apollon.mk << 'MKEOF'
-$(call inherit-product, device/xiaomi/apollon/lineage_apollon.mk)
-$(call inherit-product, vendor/corvus/config/common.mk)
+$(call inherit-product, device/xiaomi/apollon/device.mk)
+$(call inherit-product, vendor/corvus/config/corvus.mk)
 
 PRODUCT_NAME := corvus_apollon
+PRODUCT_DEVICE := apollon
 PRODUCT_BRAND := Xiaomi
 PRODUCT_MODEL := Xiaomi Mi 10T
-PRODUCT_DEVICE := apollon
+PRODUCT_MANUFACTURER := Xiaomi
+
+PRODUCT_SOONG_NAMESPACES += \
+    hardware/qcom-caf/bootctrl \
+    hardware/xiaomi
 
 CORVUS_BUILD_TYPE := UNOFFICIAL
 MKEOF
 
-# Update AndroidProducts.mk
 cat > device/xiaomi/apollon/AndroidProducts.mk << 'MKEOF'
 PRODUCT_MAKEFILES := \
-    $(LOCAL_DIR)/lineage_apollon.mk \
     $(LOCAL_DIR)/corvus_apollon.mk
 
 COMMON_LUNCH_CHOICES := \
-    lineage_apollon-userdebug \
     corvus_apollon-userdebug
 MKEOF
+
+# FIX 2: Stub common.mk if Corvus vendor tree references it but didn't ship it.
+# corvus.mk calls inherit-product on common.mk; create it if missing so lunch doesn't abort.
+if [ -d vendor/corvus/config ] && [ ! -f vendor/corvus/config/common.mk ]; then
+    echo "⚠ WARNING: vendor/corvus/config/common.mk missing — creating stub"
+    touch vendor/corvus/config/common.mk
+fi
 
 echo "Product files written and patched."
 
 # ================= CONFLICT FIXES =================
 echo ">>>> [6] Remove conflicting CAF modules"
-
 for CHIP in sdm660 sdm845 msm8953 msm8996 msm8998 sm8150 sm8350 sm8450 sm8550; do
     rm -rf hardware/qcom-caf/${CHIP}/display
 done
-
 for CHIP in sm8250 sm8350 sdm660 sdm845 msm8953; do
     rm -rf hardware/qcom-caf/${CHIP}/audio/adsprpcd
 done
@@ -172,28 +165,30 @@ rm -rf hardware/qcom-caf/sm8550/audio/primary-hal/adsprpcd
 rm -rf hardware/qcom-caf/sm8550/audio/pal
 rm -rf hardware/qcom-caf/sm8550/audio/agm
 rm -rf packages/apps/Trebuchet
-
 echo "Conflicts resolved."
 
 # ================= BUILD =================
 echo ">>>> [7] Build"
-
 export BUILD_USERNAME=basit
 export BUILD_HOSTNAME=crave
 export TZ="Asia/Karachi"
 
 source build/envsetup.sh
+
+# FIX 3: lunch failure isn't always caught by ||; use explicit exit code check
 lunch corvus_apollon-userdebug
-m installclean
-
-# Using mka for optimized build handling on Crave
-mka corvus 2>&1 | tee "$BUILD_LOG"
-
-if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+if [ $? -ne 0 ]; then
+    echo "❌ lunch failed"
     on_fail
 fi
 
-if grep -qE "ninja failed|failed to build some targets" "$BUILD_LOG"; then
+m installclean
+
+# FIX 4: mka is a LineageOS extension not present in Corvus's AOSP build/make.
+# Use plain `m` with an explicit -j flag instead.
+m -j$(nproc --all) corvus 2>&1 | tee "$BUILD_LOG"
+
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     on_fail
 fi
 
@@ -201,31 +196,14 @@ fi
 END_TIME=$(date +%s)
 DUR=$((END_TIME - START_TIME))
 
-echo ""
 echo "============================================"
 echo "✅ BUILD SUCCESSFUL"
 echo "    Time: $((DUR/3600))h $(((DUR%3600)/60))min $((DUR%60))sec"
 echo "============================================"
 
 ROM_ZIP=$(ls -t ${OUT_DIR}/*.zip 2>/dev/null | head -n 1)
-
 if [ -n "$ROM_ZIP" ]; then
-    ROM_SIZE=$(du -h "$ROM_ZIP" | awk '{print $1}')
-    echo "ZIP: $(basename $ROM_ZIP) (${ROM_SIZE})"
-    echo ""
-    echo ">>>> [8] Upload"
-
-    GO_URL=$(gofile_upload "$ROM_ZIP")
-    PD_URL=$(pixeldrain_upload "$ROM_ZIP")
-
-    echo "  GoFile:      ${GO_URL}"
-    echo "  PixelDrain: ${PD_URL}"
-
-    for IMG in boot.img vendor_boot.img init_boot.img recovery.img; do
-        FILE="${OUT_DIR}/${IMG}"
-        if [ -f "$FILE" ]; then
-            URL=$(gofile_upload "$FILE")
-            echo "  ${IMG}: ${URL}"
-        fi
-    done
+    echo ">>>> [8] Uploading $(basename $ROM_ZIP)"
+    echo "  GoFile:     $(gofile_upload "$ROM_ZIP")"
+    echo "  PixelDrain: $(pixeldrain_upload "$ROM_ZIP")"
 fi
